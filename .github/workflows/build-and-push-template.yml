@@ -34,37 +34,21 @@ jobs:
         with:
           repository: ${{ github.repository }}
 
-      # PASSO NOVO: Prepara o nome de usuário em uma variável de ambiente
-      - name: Prepare Dockerhub Username
-        id: prep
-        run: echo "DOCKERHUB_USERNAME_LC=${{ tolower(secrets.DOCKERHUB_USERNAME) }}" >> $GITHUB_ENV
-
       - name: Login no Docker Hub
         uses: docker/login-action@v3
         with:
-          # Usamos a nova variável de ambiente aqui para garantir consistência
-          username: ${{ env.DOCKERHUB_USERNAME_LC }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Condição para build de Python
-      - name: Build e Push da imagem Python
-        if: ${{ inputs.language == 'python' }}
+      - name: Build e Push da Imagem
+        # Removemos a condição "if" e juntamos os builds,
+        # pois a ação é a mesma para Python e Node.js
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.repo-path }}
           push: true
-          # CORREÇÃO FINAL: Usamos a variável de ambiente, não o secret diretamente
-          tags: ${{ env.DOCKERHUB_USERNAME_LC }}/${{ inputs.image-name }}:${{ inputs.tag }}
-
-      # Condição para build de Node.js
-      - name: Build e Push da imagem Node.js
-        if: ${{ inputs.language == 'nodejs' }}
-        uses: docker/build-push-action@v5
-        with:
-          context: ${{ inputs.repo-path }}
-          push: true
-          # CORREÇÃO FINAL: Usamos a variável de ambiente, não o secret diretamente
-          tags: ${{ env.DOCKERHUB_USERNAME_LC }}/${{ inputs.image-name }}:${{ inputs.tag }}
+          # A VERSÃO SIMPLES E CORRETA
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image-name }}:${{ inputs.tag }}
 
   # O job de update-gitops-repo permanece o mesmo
   update-gitops-repo:
