@@ -1,0 +1,87 @@
+# Este workflow é um template que pode ser chamado por outros repositórios
+name: Docker Build and Push
+
+# Define os inputs e secrets que o workflow que o chamar deve fornecer
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        required: true
+        type: string
+      repo-path:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      language:
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+      PAT_GIT_GITOPS:
+        required: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código da aplicação
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+
+      - name: Login no Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Condição para build de Python
+      - name: Build e Push da imagem Python
+        if: ${{ inputs.language == 'python' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.repo-path }}
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image-name }}:${{ inputs.tag }}
+
+      # Condição para build de Node.js
+      - name: Build e Push da imagem Node.js
+        if: ${{ inputs.language == 'nodejs' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.repo-path }}
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image-name }}:${{ inputs.tag }}
+
+  # Passo de deploy que atualiza o repositório GitOps
+  update-gitops-repo:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    # Só executa na branch principal para evitar commits em outras branches
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout do Repositório GitOps
+        uses: actions/checkout@v4
+        with:
+          repository: 'SEU-USUARIO/projeto-devops-gitops'
+          token: ${{ secrets.PAT_GIT_GITOPS }}
+
+      - name: Atualizar Manifesto Helm
+        run: |
+          # Troca a tag da imagem no values.yaml
+          # O caminho será ajustado no próximo passo quando criarmos o Helm Chart
+          sed -i "s|tag: .*|tag: '${{ inputs.tag }}'|g" apps/${{ inputs.image-name }}/values.yaml
+
+      - name: Fazer Commit e Push da mudança
+        run: |
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add apps/${{ inputs.image-name }}/values.yaml
+          git commit -m "ci: atualiza imagem ${{ inputs.image-name }} para ${{ inputs.tag }}" || echo "Nenhuma mudança a comitar"
+          git push
