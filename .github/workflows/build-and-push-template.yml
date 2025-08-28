@@ -4,11 +4,34 @@ on:
   workflow_call:
     inputs:
       image-name:
+        description: "Nome do repositório no ECR (sem o registry)"
         required: true
         type: string
-    secrets:
-      AWS_ACCOUNT_ID:
+      # caminhos do GitOps
+      gitops-repo:
+        description: "URL HTTPS do repositório GitOps (ex.: https://github.com/LuanCristopher/helm-charts-ilia.git)"
         required: true
+        type: string
+      gitops-branch:
+        description: "Branch de destino do GitOps"
+        required: false
+        default: "main"
+        type: string
+      gitops-values-path:
+        description: "Caminho do values.yaml a atualizar no GitOps (ex.: api/values.yaml)"
+        required: true
+        type: string
+      gitops-image-repo-key:
+        description: "Chave do campo repository no values (ex.: .image.repository)"
+        required: false
+        default: ".image.repository"
+        type: string
+      gitops-image-tag-key:
+        description: "Chave do campo tag no values (ex.: .image.tag)"
+        required: false
+        default: ".image.tag"
+        type: string
+    secrets:
       AWS_REGION:
         required: true
       AWS_ACCESS_KEY_ID:
@@ -21,6 +44,10 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      full_image: ${{ steps.build-image.outputs.full_image }}
+      image_repo: ${{ steps.build-image.outputs.image_repo }}
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
     steps:
       - name: Checkout do Código
         uses: actions/checkout@v4
@@ -43,11 +70,64 @@ jobs:
           ECR_REPOSITORY: ${{ inputs.image-name }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image_uri=$ECR_REGISTRY/$ECR_REPOSITORY" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "full_image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "image_repo=$ECR_REGISTRY/$ECR_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   update-gitops-repo:
     runs-on: ubuntu-latest
     needs: build-and-push
-    # ... (o resto deste job continua o mesmo, mas vamos precisar ajustar o values.yaml)
+    steps:
+      - name: Checkout do repositório GitOps
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }} # faz um checkout “fake” para permitir o seguinte
+          path: throwaway
+
+      - name: Clonar GitOps com PAT
+        run: |
+          set -euo pipefail
+          git clone --branch "${{ inputs.gitops-branch }}" \
+            https://${{ secrets.PAT_GIT_GITOPS }}@${{ inputs.gitops-repo#https://}} gitops
+        shell: bash
+
+      - name: Instalar yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Atualizar values.yaml com nova imagem
+        working-directory: gitops
+        run: |
+          set -euo pipefail
+          VALUES_FILE="${{ inputs.gitops-values-path }}"
+          REPO_KEY="${{ inputs.gitops-image-repo-key }}"
+          TAG_KEY="${{ inputs.gitops-image-tag-key }}"
+          IMAGE_REPO="${{ needs.build-and-push.outputs.image_repo }}"
+          IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+
+          test -f "$VALUES_FILE" || { echo "Values não encontrado: $VALUES_FILE"; exit 1; }
+
+          # Atualiza repository e tag
+          yq -i "$REPO_KEY = \"$IMAGE_REPO\"" "$VALUES_FILE"
+          yq -i "$TAG_KEY = \"$IMAGE_TAG\"" "$VALUES_FILE"
+
+          echo "Diff:"
+          git --no-pager diff "$VALUES_FILE" || true
+
+      - name: Commit & push
+        working-directory: gitops
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add .
+            git commit -m "chore(ci): update image to ${{ needs.build-and-push.outputs.full_image }}"
+            git push origin "${{ inputs.gitops-branch }}"
+          else
+            echo "Sem mudanças no GitOps (provavelmente mesmo SHA)."
+          fi
