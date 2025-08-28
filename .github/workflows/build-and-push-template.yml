@@ -1,26 +1,19 @@
-# Este workflow é um template que pode ser chamado por outros repositórios
-name: Docker Build and Push
+name: ECR Build and Push (Generic)
 
-# Define os inputs e secrets que o workflow que o chamar deve fornecer
 on:
   workflow_call:
     inputs:
       image-name:
         required: true
         type: string
-      repo-path:
-        required: true
-        type: string
-      tag:
-        required: true
-        type: string
-      language:
-        required: true
-        type: string
     secrets:
-      DOCKERHUB_USERNAME:
+      AWS_ACCOUNT_ID:
         required: true
-      DOCKERHUB_TOKEN:
+      AWS_REGION:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
         required: true
       PAT_GIT_GITOPS:
         required: true
@@ -29,48 +22,32 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout do código da aplicação
+      - name: Checkout do Código
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository }}
 
-      - name: Login no Docker Hub
-        uses: docker/login-action@v3
+      - name: Configurar Credenciais da AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Build e Push da Imagem
-        # Removemos a condição "if" e juntamos os builds,
-        # pois a ação é a mesma para Python e Node.js
-        uses: docker/build-push-action@v5
-        with:
-          context: ${{ inputs.repo-path }}
-          push: true
-          # A VERSÃO SIMPLES E CORRETA
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image-name }}:${{ inputs.tag }}
+      - name: Login no Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-  # O job de update-gitops-repo permanece o mesmo
+      - name: Build e Push da Imagem para o ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.image-name }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image_uri=$ECR_REGISTRY/$ECR_REPOSITORY" >> $GITHUB_OUTPUT
+
   update-gitops-repo:
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout do Repositório GitOps
-        uses: actions/checkout@v4
-        with:
-          repository: 'LuanCristopher/projeto-devops-gitops'
-          token: ${{ secrets.PAT_GIT_GITOPS }}
-
-      - name: Atualizar Manifesto Helm
-        run: |
-          sed -i "s|tag: .*|tag: '${{ inputs.tag }}'|g" apps/${{ inputs.image-name }}/values.yaml
-
-      - name: Fazer Commit e Push da mudança
-        run: |
-          git config --global user.email "42898282+github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          git add apps/${{ inputs.image-name }}/values.yaml
-          git commit -m "ci: atualiza imagem ${{ inputs.image-name }} para ${{ inputs.tag }}" || echo "Nenhuma mudança a comitar"
-          git push
+    # ... (o resto deste job continua o mesmo, mas vamos precisar ajustar o values.yaml)
