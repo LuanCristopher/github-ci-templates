@@ -104,22 +104,34 @@ jobs:
 
       - name: Atualizar values.yaml com nova imagem
         working-directory: gitops
+        shell: bash
         run: |
           set -euo pipefail
           VALUES_FILE="${{ inputs.gitops-values-path }}"
-          REPO_KEY="${{ inputs.gitops-image-repo-key }}"
-          TAG_KEY="${{ inputs.gitops-image-tag-key }}"
-          IMAGE_REPO="${{ needs.build-and-push.outputs.image_repo }}"
-          IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
-
+          REPO_KEY='${{ inputs.gitops-image-repo-key }}'
+          TAG_KEY='${{ inputs.gitops-image-tag-key }}'
+          IMAGE_REPO='${{ needs.build-and-push.outputs.image_repo }}'
+          IMAGE_TAG='${{ needs.build-and-push.outputs.image_tag }}'
+      
           test -f "$VALUES_FILE" || { echo "Values não encontrado: $VALUES_FILE"; exit 1; }
-
-          # Atualiza repository e tag
-          yq -i "$REPO_KEY = \"$IMAGE_REPO\"" "$VALUES_FILE"
+      
+          # 1) Atualiza SEMPRE a tag
           yq -i "$TAG_KEY = \"$IMAGE_TAG\"" "$VALUES_FILE"
-
+      
+          # 2) Atualiza o repository apenas se vier preenchido
+          if [[ -n "$IMAGE_REPO" && "$IMAGE_REPO" != ":" ]]; then
+            yq -i "$REPO_KEY = \"$IMAGE_REPO\"" "$VALUES_FILE"
+          else
+            echo "IMAGE_REPO vazio; mantendo repository atual do values."
+          fi
+      
+          echo "---- Preview final ----"
+          yq e "$REPO_KEY" "$VALUES_FILE" || true
+          yq e "$TAG_KEY"  "$VALUES_FILE" || true
+      
           echo "Diff:"
           git --no-pager diff "$VALUES_FILE" || true
+
 
       - name: Commit & push
         working-directory: gitops
