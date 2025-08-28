@@ -90,9 +90,12 @@ jobs:
       - name: Clonar GitOps com PAT
         run: |
           set -euo pipefail
-          git clone --branch "${{ inputs.gitops-branch }}" \
-            https://${{ secrets.PAT_GIT_GITOPS }}@${{ inputs.gitops-repo#https://}} gitops
+          GITOPS_URL='${{ inputs.gitops-repo }}'
+          # injeta o PAT logo após "https://"
+          AUTH_URL="${GITOPS_URL/https:\/\//https:\/\/${{ secrets.PAT_GIT_GITOPS }}@}"
+          git clone --branch '${{ inputs.gitops-branch }}' "$AUTH_URL" gitops
         shell: bash
+
 
       - name: Instalar yq
         run: |
